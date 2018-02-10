@@ -54,6 +54,48 @@ bool Module::updateModule ()
 {
     // FILL IN THE CODE
     // hint: implement the Computed Torque controller
+    //read state
+    ienc->getEncoders(positionsInDeg.data());
+    convertDegToRad(positionsInDeg, positionsInRad);
+
+    ienc->getEncoderSpeeds(velocitiesInDegS.data());
+    convertDegToRad(velocitiesInDegS, velocitiesInRadS);
+
+    // Compute the bias term of the inverse dynamics, passing data to iDynTree
+    // Note: for the sake of simplicity we are allocate dynamically this iDynTree
+    // quantities here, that in general is not real time safe.
+    // We are considering the "fixed base" case, i.e. the base is always fixed to the ground
+    iDynTree::Transform w_H_b = iDynTree::Transform::Identity(); //identity + zero vector
+    iDynTree::Twist baseVel = iDynTree::Twist::Zero();
+    iDynTree::VectorDynSize jointPos(positionsInRad.size()), jointVelSetToZero(velocitiesInRadS.size());
+    jointVelSetToZero.zero();
+
+    // Convert measured values to iDynTree quantities
+    iDynTree::toiDynTree(positionsInRad, jointPos);
+
+    // Set all other input quantities of the inverse dynamics to zero
+
+    iDynTree::Vector3 gravity;
+    gravity.zero();
+    gravity(2) = -9.81;
+
+    kinDynModel.setRobotState(w_H_b, jointPos, baseVel, jointVelSetToZero, gravity);
+
+    // The computeGeneralizedGravityForces method is computing the g(q) term, for both the base and the joint
+    iDynTree::FreeFloatingGeneralizedTorques g_q(kinDynModel.model());
+    kinDynModel.generalizedGravityForces(g_q);
+
+    // We extract the joint part to a YARP vector
+    iDynTree::toYarp(g_q.jointTorques(), gravityCompensation);
+
+    //compute control
+    for (int i = 0; i < positionsInRad.size(); i++) {
+        errorInRad(i) = position_reference_rad(i) - positionsInRad(i);
+        torquesInNm(i) = gravityCompensation(i) + kp(i) * errorInRad(i) - kd(i) * velocitiesInRadS(i);
+    }
+
+    itrq->setRefTorques(torquesInNm.data());
+
 
     return true;
 }
@@ -180,6 +222,64 @@ bool Module::configure (yarp::os::ResourceFinder &rf)
 
     // FILL IN THE CODE
     // hint: resize or initialize any attribute that you added to the class
+    if(!inPort.open("/computed-torque/qDes:i")){
+        yError()<<"cannot open port";
+    }
+    position_reference_rad.resize(actuatedDOFs, 0.0);
+
+    positionsInDeg.resize(actuatedDOFs, 0.0);
+    positionsInRad.resize(actuatedDOFs, 0.0);
+    velocitiesInDegS.resize(actuatedDOFs, 0.0);
+    velocitiesInRadS.resize(actuatedDOFs, 0.0);
+    gravityCompensation.resize(actuatedDOFs, 0.0);
+
+
+    // Make sure that we are reading data from the robot before proceeding
+    bool readEncoderSuccess = false;
+    for (int i=0; i < 10 && !readEncoderSuccess; i++) {
+        readEncoderSuccess = ienc->getEncoders(positionsInDeg.data());
+        if (!readEncoderSuccess) {
+            yarp::os::Time::delay(0.1);
+        }
+    }
+
+    if (!readEncoderSuccess) {
+        yError()<<"Unable to read encoders, exiting.";
+        return false;
+    }
+
+    convertDegToRad(positionsInDeg, position_reference_rad);
+
+    int index = -1;
+
+    iDynTree::IJointConstPtr joint = model.getJoint(model.getJointIndex("l_shoulder_pitch"));
+    if (!joint) {
+        std::cout << "Could not retrieve index of l_shoulder_pitch.\n";
+        return false;
+    }
+
+
+    inPort.read(position_reference_rad);
+
+    //write
+    errorInRad.resize(actuatedDOFs, 0.0);
+
+    kp.resize(actuatedDOFs, 1.5);
+    kd.resize(actuatedDOFs, 0.5);
+
+    torquesInNm.resize(actuatedDOFs, 0.0);
+
+    zeroDofs.resize(actuatedDOFs, 0.0);
+    baseZeroDofs.resize(6, 0.0);
+
+    grav.resize(3, 0.0);
+    grav(2) = -9.81;
+
+    // Setting the control mode of all the controlled joints to torque control mode
+    // See http://wiki.icub.org/wiki/Control_Modes for more info about the control modes
+    std::vector<int> ctrlModes(actuatedDOFs, VOCAB_CM_TORQUE);
+    imod->setControlModes(ctrlModes.data());
+
 
     return true;
 }

@@ -32,6 +32,24 @@ class Module : public yarp::os::RFModule
 
     // FILL IN THE CODE
     // hint: what attributes you need?
+    // Quantities used by the control
+    yarp::os::Port inPort;
+    yarp::sig::Vector position_reference_rad;
+    yarp::sig::Vector positionsInRad;
+    yarp::sig::Vector velocitiesInRadS;
+    yarp::sig::Vector positionsInDeg;
+    yarp::sig::Vector velocitiesInDegS;
+    yarp::sig::Vector gravityCompensation;
+
+    //write
+    yarp::sig::Vector errorInRad;
+    yarp::sig::Vector kp; // Nm/rad
+    yarp::sig::Vector kd; // Nm/rad
+    yarp::sig::Vector torquesInNm;
+    yarp::sig::Vector zeroDofs;
+    yarp::sig::Vector baseZeroDofs;
+    yarp::sig::Vector grav;
+
 
 public:
     virtual double getPeriod ();
